@@ -3,6 +3,7 @@
 require_relative "CoinjarTriangleArbitrage/version"
 require 'httparty'
 require 'json'
+require 'parallel'
 
 module CoinjarTriangleArbitrage
   START_CURRENCY = 'GBP'
@@ -46,10 +47,10 @@ module CoinjarTriangleArbitrage
     end
     #BTC/GBP - BTC base - GBP pair
     def base_to_pair(base,pair,amount_of_base)
-      @public_client.ticker("#{base}#{pair}")["ask"].to_f * amount_of_base.to_f
+      @public_client.ticker("#{base}#{pair}")["ask"].to_f * 1
     end
     def pair_to_base(base,pair,amount_of_pair)
-      amount_of_pair.to_f / @public_client.ticker("#{base}#{pair}")["ask"].to_f
+      1 / @public_client.ticker("#{base}#{pair}")["ask"].to_f
     end
     def get_quote_based_on_trade_direction(pair,direction,amount)
       # puts pair.to_s
@@ -62,13 +63,19 @@ module CoinjarTriangleArbitrage
       end
     end
     def calculate_result
-      @trade_one_price = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction],FIAT_DECIMAL_INITIAL_AMOUNT) # * 0.999
+      @trade_one_price = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction],FIAT_DECIMAL_INITIAL_AMOUNT) * 0.999
       @trade_two_price = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction],@trade_one_price) * 0.999
       @trade_three_price = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction],@trade_two_price) * 0.999
-      @trade_one_price * @trade_two_price * @trade_three_price
+      @trade_one_price * @trade_two_price * @trade_three_price * FIAT_DECIMAL_INITIAL_AMOUNT
     end
     def to_s
-      "#{@chain_args} - result: #{@result} - #{START_CURRENCY == END_CURRENCY ? "profit = ".join(@profit.to_s) : "Please Manually Calculate For Now"}"
+      profit = @profit
+      if START_CURRENCY == END_CURRENCY
+        profit = @profit.to_s
+      else
+        profit = "Please Manually Calculate For Now"
+      end
+      return "#{@chain_args} - result: #{@result} - profit is = #{profit}"
     end
   end
   class ChainFactory
@@ -80,6 +87,7 @@ module CoinjarTriangleArbitrage
       @end_currency = CoinjarTriangleArbitrage::END_CURRENCY
       @split_ids = @all_product_ids.map {|id| id.split("/")}
       @start_pairs = find_starting_pairs
+      puts "split ids - #{@start_pairs}"
       @starting_trades = @start_pairs.select {|pair| pair[0] == @start_currency || pair[1] == @start_currency }
       @end_pairs = []
       if @start_currency == @end_currency
@@ -90,11 +98,13 @@ module CoinjarTriangleArbitrage
       @intermediate_pairs = find_intermediate_pairs
     end
     def find_starting_pairs
-      @split_ids.select {|pair| @start_currency == pair[0] || @start_currency == pair[1]}
+      puts "finding start pairs"
+      puts "done finding start pairs"
+      return @split_ids.select {|pair| @start_currency == pair[0] || @start_currency == pair[1]}
     end
 
-    # problem here
     def find_intermediate_pairs
+      puts "starting to find intermediate pairs"
       sieved_pairs = []
       start_symbols = @starting_trades
       start_symbols = start_symbols.flatten.filter {|symbol| symbol != @start_currency.to_s }
@@ -102,7 +112,7 @@ module CoinjarTriangleArbitrage
       if @start_currency != @end_currency
         end_symbols = @end_pairs.flatten.filter {|symbol| symbol != @end_currency.to_s }
       end
-      start_symbols.each do |start|
+      Parallel.each(start_symbols,in_threads:start_symbols.count) do |start|
         end_symbols.each do |ending|
           if @split_ids.any?([start,ending])
             sieved_pairs << [start,ending]
@@ -112,39 +122,48 @@ module CoinjarTriangleArbitrage
           end
         end
       end
+      puts "done finding intermediate pairs"
       return sieved_pairs
     end
 
     def find_ending_pairs
+      puts "finding ending pairs"
       @split_ids.select {|pair| @end_currency == pair[0] || @end_currency == pair[1]}
+      puts "done finding ending pairs"
+    end
+    def determine_buy_or_sell(pair)
+      if pair[1] == @start_currency || pair[1] == @end_currency
+        return  :buy
+      else
+        return :sell
+      end
+    end
+    def determine_middle_buy_or_sell(start,middle)
+      operative = start.filter{|symbol| symbol != @start_currency}
+      if operative == middle[0]
+        return :buy
+      else
+        return :sell
+      end
+    end
+    def build_middle_pairs(start,ending)
+      merged = start + ending
+      return merged.select {|symbol| symbol != @start_currency || symbol != @end_currency}
     end
     def build_chains
+      puts "building chains now"
       chains = []
       chain_args = {}
-      @starting_trades.each do |start|
-        @end_pairs.each do |ending|
-          @intermediate_pairs.each do |middle|
-            if (start[0] == middle[0] && middle[1] == ending[0])
-              chain_args = {start: start,:start_trade_direction => :sell,middle:middle,:middle_trade_direction => :buy,ending:ending,:ending_trade_direction => :sell}
-            elsif (start[1] == middle[0] && middle[1] == ending[1])
-              chain_args = {start: start,:start_trade_direction => :buy,middle:middle,:middle_trade_direction => :buy,ending:ending,:ending_trade_direction => :buy}
-            elsif (start[0] == middle[1] && middle[0] == ending[1])
-              chain_args = {start: start,:start_trade_direction => :sell,middle:middle,:middle_trade_direction => :sell,ending:ending,:ending_trade_direction => :buy}
-            elsif (start[0] == middle[1] && middle[1] == ending[0])
-              chain_args = {start: start,:start_trade_direction => :sell,middle:middle,:middle_trade_direction => :buy,ending:ending,:ending_trade_direction => :sell}
-            elsif (start[1] == middle[0] && middle[1] == ending[0])
-              chain_args = {start: start,:start_trade_direction => :buy,middle:middle,:middle_trade_direction => :buy,ending:ending,:ending_trade_direction => :sell}
-            elsif (start[0] == middle[1] && middle[0] == ending[0])
-              chain_args = {start: start,:start_trade_direction => :sell,middle:middle,:middle_trade_direction => :sell,ending:ending,:ending_trade_direction => :sell}
-            elsif (start[1] == middle[1]&& middle[0] == ending[0])
-              chain_args = {start: start,:start_trade_direction => :buy,middle:middle,:middle_trade_direction => :sell,ending:ending,:ending_trade_direction => :sell}
-            end
-            # puts [start,middle,ending].to_s
-            # puts chain_args.to_s
-            chains.append(Chain.new(@public_client,chain_args))
-          end
+      Parallel.each(@starting_trades.uniq,in_threads:@starting_trades.uniq.count) do |start|
+        @end_pairs.uniq.each do |ending|
+          middle = build_middle_pairs(start,ending)
+          chain_args = {start: start,:start_trade_direction => determine_buy_or_sell(start),middle:middle,:middle_trade_direction => determine_middle_buy_or_sell(middle,ending),ending:ending,:ending_trade_direction => determine_buy_or_sell(ending)}
+          chain = Chain.new(@public_client,chain_args)
+          puts chain.to_s
+          chains.append(chain)
         end
       end
+      puts "done building chains"
       return chains
     end
   end
@@ -167,4 +186,4 @@ module CoinjarTriangleArbitrage
   end
 end
 
-puts CoinjarTriangleArbitrage::Scout.new.run.to_s
+puts CoinjarTriangleArbitrage::Scout.new.run[-1].to_s
