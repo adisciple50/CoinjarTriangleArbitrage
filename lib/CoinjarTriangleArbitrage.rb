@@ -1,8 +1,152 @@
 # frozen_string_literal: true
 
 require_relative "CoinjarTriangleArbitrage/version"
+require 'httparty'
+require 'json'
 
 module CoinjarTriangleArbitrage
-  class Error < StandardError; end
-  # Your code goes here...
+  START_CURRENCY = 'GBP'
+  END_CURRENCY = 'GBP'
+  FIAT_DECIMAL_INITIAL_AMOUNT = 50.00
+  class PublicClient
+    include HTTParty
+    base_uri 'api.exchange.coinjar.com:443'
+    headers {'accept' => 'application/json'}
+    def initialize
+    end
+    def get_all_products
+      JSON.parse(self.class.get('/products').to_s)
+    end
+    def ticker(id)
+      JSON.parse(self.class.get("/products/#{id.to_s.upcase}/ticker"))
+    end
+  end
+  class PrivateClient
+    include HTTParty
+    base_uri 'api.exchange.coinjar.com:443'
+    headers 'Authorization' => "Bearer #{ENV['COINJAR_TRADES']}",'accept' => 'application/json'
+
+    def initialize
+    end
+  end
+  class Chain
+    attr_accessor :result,:trade_one_price,:trade_two_price,:trade_three_price
+    def initialize(public_client,chain_args)
+      @public_client = public_client
+      @chain_args = chain_args
+      @result = calculate_result
+      # only valid if the start currency and end currency are the same
+      @profit = @result - FIAT_DECIMAL_INITIAL_AMOUNT
+    end
+    #BTC/GBP - BTC base - GBP pair
+    def base_to_pair(base,pair,amount_of_base)
+      @public_client.ticker("#{base}#{pair}")["ask"].to_f * amount_of_base.to_f
+    end
+    def pair_to_base(base,pair,amount_of_pair)
+      amount_of_pair.to_f / @public_client.ticker("#{base}#{pair}")["ask"].to_f
+    end
+    def get_quote_based_on_trade_direction(pair,direction,amount)
+      # puts pair.to_s
+      # puts direction.to_s
+      # puts amount.to_s
+      if direction == :buy
+        return pair_to_base(pair[0].upcase,pair[1].upcase,amount)
+      elsif direction == :sell
+        return base_to_pair(pair[0].upcase,pair[1].upcase,amount)
+      end
+    end
+    def calculate_result
+      @trade_one_price = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction],FIAT_DECIMAL_INITIAL_AMOUNT) # * 0.999
+      puts @trade_one_price
+      @trade_two_price = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction],@trade_one_price) * 0.999
+      @trade_three_price = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction],@trade_two_price) * 0.999
+      @trade_one_price * @trade_two_price * @trade_three_price
+    end
+    def to_s
+      "#{@chain_args} - result: #{@result} - #{START_CURRENCY == END_CURRENCY ? "profit = ".join(@profit.to_s) : "Please Manually Calculate For Now"}"
+    end
+  end
+  class ChainFactory
+    def initialize(public_client,all_product_ids,all_products)
+      @all_products = all_products
+      @public_client = public_client
+      @all_product_ids = all_product_ids
+      @start_currency = CoinjarTriangleArbitrage::START_CURRENCY
+      @end_currency = CoinjarTriangleArbitrage::END_CURRENCY
+      @split_ids = @all_product_ids.map {|id| id.split("/")}
+      @start_pairs = find_starting_pairs
+      @end_pairs = @start_currency == @end_currency ? @start_pairs : find_ending_pairs
+      @intermediate_pairs = find_intermediate_pairs
+    end
+    def find_starting_pairs
+      @split_ids.select {|pair| @start_currency in pair}
+    end
+
+    # problem here
+    def find_intermediate_pairs
+      sieved_pairs = []
+      start_symbols = @start_pairs.select {|pair| pair[0] == @start_currency || pair[1] == @start_currency }
+      start_symbols = start_symbols.flatten.filter {|symbol| symbol != @start_currency.to_s }
+      end_symbols = start_symbols
+      if @start_currency != @end_currency
+        end_symbols = @end_pairs.select {|pair| pair[1] == @end_currency || pair[0] != @end_currency }
+        end_symbols.flatten.filter {|symbol| symbol != @end_currency }
+      end
+      start_symbols.each do |start|
+        end_symbols.each do |ending|
+          if @split_ids.any?([start,ending])
+            sieved_pairs << [start,ending]
+          end
+          if @split_ids.any?([ending,start])
+            sieved_pairs << [ending,start]
+          end
+        end
+      end
+      return sieved_pairs
+    end
+
+    def find_ending_pairs
+      @split_ids.map {|pair| @end_currency in pair}
+    end
+    def build_chains
+      chains = []
+      chain_args = {}
+      @start_pairs.each do |start|
+        @end_pairs.each do |ending|
+          @intermediate_pairs.each do |middle|
+            if (middle[0] == start[0] && middle[1] == ending[0])
+              chain_args = {start: start,:start_trade_direction => :buy,middle:middle,:middle_trade_direction => :sell,ending:ending,:ending_trade_direction => :sell}
+            elsif (middle[0] == start[1] && middle[1] == ending[1])
+              chain_args = {start: start,:start_trade_direction => :sell,middle:middle,:middle_trade_direction => :sell,ending:ending,:ending_trade_direction => :buy}
+            elsif (middle[1] == start[0] && middle[0] == ending[1])
+              chain_args = {start: start,:start_trade_direction => :buy,middle:middle,:middle_trade_direction => :buy,ending:ending,:ending_trade_direction => :sell}
+            elsif (middle[1] == start[1] && middle[0] == ending[0])
+              chain_args = {start: start,:start_trade_direction => :sell,middle:middle,:middle_trade_direction => :buy,ending:ending,:ending_trade_direction => :buy}
+            end
+            chains.append(Chain.new(@public_client,chain_args))
+          end
+        end
+      end
+      return chains
+    end
+  end
+
+
+
+  class Scout
+    # include HTTParty
+    # base_uri 'api.exchange.coinjar.com:443'
+    # headers 'Authorization' => "Bearer #{ENV['COINJAR_TRADES']}",'accept' => 'application/json'
+
+    def initialize
+      @@public_client = CoinjarTriangleArbitrage::PublicClient.new
+      @all_products = @@public_client.get_all_products
+      @all_product_ids = @all_products.map { |currency| currency["name"] }
+    end
+    def run
+      ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.sort_by {|chain| chain.result <=> chain.result}
+    end
+  end
 end
+
+puts CoinjarTriangleArbitrage::Scout.new.run[-1].to_s
