@@ -38,14 +38,14 @@ module CoinjarTriangleArbitrage
     end
     # {oid:"number"}
     def place_order(product_id,price,buy_or_sell,size,type = "LMT")
-      JSON.parse(self.class.post('/orders',body: JSON.generate({"type" => type.to_s,"size" => size.to_s,"product_id" => product_id.to_s,"side" => buy_or_sell.to_s,"price" => price.to_s})))
+      JSON.parse(self.class.post('/orders',body: JSON.generate({"type" => type.to_s,"size" => size.to_s,"product_id" => product_id.to_s,"side" => buy_or_sell.to_s,"price" => price.to_s})).to_s)
     end
     def get_order(order_id)
-      JSON.parse(self.class.get("/orders/#{order_id.to_s}"))
+      JSON.parse(self.class.get("/orders/#{order_id.to_s}").to_s).to_h
     end
   end
   class Chain
-    attr_accessor :result,:chain_args,:trade_one_quote,:trade_two_quote,:trade_three_quote
+    attr_accessor :result,:chain_args,:trade_one_quote,:trade_two_quote,:trade_three_quote,:profit,:trade_one_price,:trade_two_price,:trade_three_price
     def initialize(public_client,chain_args)
       @public_client = public_client
       @chain_args = chain_args
@@ -143,8 +143,10 @@ module CoinjarTriangleArbitrage
       puts "done finding ending pairs"
     end
     def determine_buy_or_sell(pair)
-      if pair[1] == @start_currency || pair[1] == @end_currency
-        return  :buy
+      if pair[1] == @start_currency
+        return :buy
+      elsif pair[0] == @end_currency
+        return :buy
       else
         return :sell
       end
@@ -190,7 +192,7 @@ module CoinjarTriangleArbitrage
       @all_product_ids = @all_products.map { |currency| currency["name"] }
     end
     def run
-      ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.sort_by {|chain| chain.result <=> chain.result}
+      ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.max {|chain| chain.profit <=> chain.profit}
     end
   end
   class Trader
@@ -204,15 +206,22 @@ module CoinjarTriangleArbitrage
     end
     def get_precision(product,order_side)
       all_products = @public.get_all_products
-      selected_product = all_products.select {|p| p["id"] == product}
+      selected_product = all_products.select {|p| p["name"] == product.join("/")}
+      # selected_product = selected_product[0]
+      puts selected_product.to_s
       if order_side == :buy
-        return selected_product["counter_currency"]["subunit_to_unit"].to_i.digits[1,-1].length
+        precision = selected_product[0]["counter_currency"]
+        puts precision
+        return precision["subunit_to_unit"].to_i.digits[1..-1].length
       else
-        return selected_product["base_currency"]["subunit_to_unit"].to_i.digits[1,-1].length
+        precision = selected_product[0]["base_currency"]
+        puts precision
+        return precision["subunit_to_unit"].to_i.digits[1..-1].length
       end
     end
     def wait_until_filled(oid)
       order = @client.get_order(oid)
+      puts order
       while order["status"] != "filled"
         sleep 1
         puts order.to_s
@@ -220,7 +229,7 @@ module CoinjarTriangleArbitrage
     end
     def run
       while @trading
-        if winner.profit > 1
+        if @winner.profit > 1
           amount_one = FIAT_DECIMAL_INITIAL_AMOUNT.to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction]).to_f
           amount_one = amount_one.truncate(get_precision(@chain_args[:start],@chain_args[:start_trade_direction])).to_s
           trade_one = @client.place_order(@chain_args[:start],@winner.trade_one_price,@chain_args[:start_trade_direction].to_s,amount_one)
@@ -240,6 +249,6 @@ module CoinjarTriangleArbitrage
 end
 
 
-winner = CoinjarTriangleArbitrage::Scout.new.run[-1]
+winner = CoinjarTriangleArbitrage::Scout.new.run
 puts winner.to_s
 CoinjarTriangleArbitrage::Trader.new(winner).run
