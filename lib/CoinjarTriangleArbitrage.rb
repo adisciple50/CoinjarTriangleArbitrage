@@ -9,6 +9,7 @@ module CoinjarTriangleArbitrage
   START_CURRENCY = 'GBP'
   END_CURRENCY = 'GBP'
   FIAT_DECIMAL_INITIAL_AMOUNT = 50.00
+  TRADING = true
   class PublicClient
     include HTTParty
     headers {'accept' => 'application/json'}
@@ -30,14 +31,21 @@ module CoinjarTriangleArbitrage
   end
   class PrivateClient
     include HTTParty
-    base_uri 'api.exchange.coinjar.com:443'
-    headers 'Authorization' => "Bearer #{ENV['COINJAR_TRADES']}",'accept' => 'application/json'
+    base_uri 'https://api.exchange.coinjar.com'
+    headers 'Authorization' => "Bearer #{ENV['COINJAR_TRADES']}",'accept' => 'application/json','Content-Type' => 'application/json'
 
     def initialize
     end
+    # {oid:"number"}
+    def place_order(product_id,price,buy_or_sell,size,type = "LMT")
+      JSON.parse(self.class.post('/orders',body: JSON.generate({"type" => type.to_s,"size" => size.to_s,"product_id" => product_id.to_s,"side" => buy_or_sell.to_s,"price" => price.to_s})))
+    end
+    def get_order(order_id)
+      JSON.parse(self.class.get("/orders/#{order_id.to_s}"))
+    end
   end
   class Chain
-    attr_accessor :result,:trade_one_price,:trade_two_price,:trade_three_price
+    attr_accessor :result,:chain_args,:trade_one_quote,:trade_two_quote,:trade_three_quote
     def initialize(public_client,chain_args)
       @public_client = public_client
       @chain_args = chain_args
@@ -46,26 +54,29 @@ module CoinjarTriangleArbitrage
       @profit = @result - FIAT_DECIMAL_INITIAL_AMOUNT
     end
     #BTC/GBP - BTC base - GBP pair
-    def base_to_pair(base,pair,amount_of_base)
+    def base_to_pair(base,pair)
       @public_client.ticker("#{base}#{pair}")["ask"].to_f * 1
     end
-    def pair_to_base(base,pair,amount_of_pair)
+    def pair_to_base(base,pair)
       1 / @public_client.ticker("#{base}#{pair}")["ask"].to_f
     end
-    def get_quote_based_on_trade_direction(pair,direction,amount)
+    def get_quote_based_on_trade_direction(pair,direction)
       # puts pair.to_s
       # puts direction.to_s
       # puts amount.to_s
       if direction == :buy
-        return pair_to_base(pair[0].upcase,pair[1].upcase,amount)
+        return pair_to_base(pair[0].upcase,pair[1].upcase)
       elsif direction == :sell
-        return base_to_pair(pair[0].upcase,pair[1].upcase,amount)
+        return base_to_pair(pair[0].upcase,pair[1].upcase)
       end
     end
     def calculate_result
-      @trade_one_price = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction],FIAT_DECIMAL_INITIAL_AMOUNT) * 0.999
-      @trade_two_price = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction],@trade_one_price) * 0.999
-      @trade_three_price = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction],@trade_two_price) * 0.999
+      @trade_one_quote = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction])
+      @trade_two_quote = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction])
+      @trade_three_quote = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction])
+      @trade_one_price = @trade_one_quote * 0.999
+      @trade_two_price = @trade_two_quote * 0.999
+      @trade_three_price = @trade_three_quote * 0.999
       @trade_one_price * @trade_two_price * @trade_three_price * FIAT_DECIMAL_INITIAL_AMOUNT
     end
     def to_s
@@ -168,8 +179,6 @@ module CoinjarTriangleArbitrage
     end
   end
 
-
-
   class Scout
     # include HTTParty
     # base_uri 'api.exchange.coinjar.com:443'
@@ -184,6 +193,53 @@ module CoinjarTriangleArbitrage
       ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.sort_by {|chain| chain.result <=> chain.result}
     end
   end
+  class Trader
+
+    def initialize(winning_chain)
+      @trading = TRADING
+      @winner = winning_chain
+      @chain_args = @winner.chain_args
+      @client = PrivateClient.new
+      @public = PublicClient.new
+    end
+    def get_precision(product,order_side)
+      all_products = @public.get_all_products
+      selected_product = all_products.select {|p| p["id"] == product}
+      if order_side == :buy
+        return selected_product["counter_currency"]["subunit_to_unit"].to_i.digits[1,-1].length
+      else
+        return selected_product["base_currency"]["subunit_to_unit"].to_i.digits[1,-1].length
+      end
+    end
+    def wait_until_filled(oid)
+      order = @client.get_order(oid)
+      while order["status"] != "filled"
+        sleep 1
+        puts order.to_s
+      end
+    end
+    def run
+      while @trading
+        if winner.profit > 1
+          amount_one = FIAT_DECIMAL_INITIAL_AMOUNT.to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction]).to_f
+          amount_one = amount_one.truncate(get_precision(@chain_args[:start],@chain_args[:start_trade_direction])).to_s
+          trade_one = @client.place_order(@chain_args[:start],@winner.trade_one_price,@chain_args[:start_trade_direction].to_s,amount_one)
+          wait_until_filled(trade_one["oid"])
+          amount_two = trade_one["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction]).to_f
+          amount_two = amount_two.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction])).to_s
+          trade_two = @client.place_order(@chain_args[:middle],@winner.trade_two_price,@chain_args[:middle_trade_direction].to_s,amount_two)
+          wait_until_filled(trade_two["oid"])
+          amount_three = trade_two["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction]).to_f
+          amount_three = amount_three.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
+          trade_three = @client.place_order(@chain_args[:ending],@winner.trade_three_price,@chain_args[:ending_trade_direction].to_s,amount_three)
+          wait_until_filled(trade_three["oid"])
+        end
+      end
+    end
+  end
 end
 
-puts CoinjarTriangleArbitrage::Scout.new.run[-1].to_s
+
+winner = CoinjarTriangleArbitrage::Scout.new.run[-1]
+puts winner.to_s
+CoinjarTriangleArbitrage::Trader.new(winner).run
