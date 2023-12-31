@@ -10,6 +10,7 @@ module CoinjarTriangleArbitrage
   END_CURRENCY = 'GBP'
   FIAT_DECIMAL_INITIAL_AMOUNT = 50.00
   TRADING = true
+  MIN_PROFIT = 0.2
   class PublicClient
     include HTTParty
     headers {'accept' => 'application/json'}
@@ -221,26 +222,32 @@ module CoinjarTriangleArbitrage
     end
     def wait_until_filled(oid)
       order = @client.get_order(oid)
+      if order == {}
+        raise "response is empty"
+      end
       puts order
-      while order["status"] != "filled"
+      while order["status"] != "filled" 
         sleep 1
         puts order.to_s
       end
     end
     def run
       while @trading
-        if @winner.profit > 1
+        if @winner.profit >= MIN_PROFIT
           amount_one = FIAT_DECIMAL_INITIAL_AMOUNT.to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction]).to_f
           amount_one = amount_one.truncate(get_precision(@chain_args[:start],@chain_args[:start_trade_direction])).to_s
           trade_one = @client.place_order(@chain_args[:start],@winner.trade_one_price,@chain_args[:start_trade_direction].to_s,amount_one)
+          puts trade_one
           wait_until_filled(trade_one["oid"])
           amount_two = trade_one["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction]).to_f
           amount_two = amount_two.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction])).to_s
           trade_two = @client.place_order(@chain_args[:middle],@winner.trade_two_price,@chain_args[:middle_trade_direction].to_s,amount_two)
+          puts trade_two
           wait_until_filled(trade_two["oid"])
           amount_three = trade_two["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction]).to_f
           amount_three = amount_three.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
           trade_three = @client.place_order(@chain_args[:ending],@winner.trade_three_price,@chain_args[:ending_trade_direction].to_s,amount_three)
+          puts trade_three
           wait_until_filled(trade_three["oid"])
         end
       end
