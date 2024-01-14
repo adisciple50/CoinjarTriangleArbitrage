@@ -95,6 +95,8 @@ module CoinjarTriangleArbitrage
       @all_products = all_products
       @public_client = public_client
       @all_product_ids = all_product_ids
+      puts "all product ids is"
+      puts @all_product_ids
       @start_currency = CoinjarTriangleArbitrage::START_CURRENCY
       @end_currency = CoinjarTriangleArbitrage::END_CURRENCY
       @split_ids = @all_product_ids.map {|id| id.split("/")}
@@ -162,6 +164,7 @@ module CoinjarTriangleArbitrage
     end
     def build_middle_pairs(start,ending)
       merged = start + ending
+      merged.select {|symbol| symbol != @start_currency || symbol != @end_currency}
       return merged.select {|symbol| symbol != @start_currency || symbol != @end_currency}
     end
     def build_chains
@@ -171,10 +174,14 @@ module CoinjarTriangleArbitrage
       Parallel.each(@starting_trades.uniq,in_threads:@starting_trades.uniq.count) do |start|
         @end_pairs.uniq.each do |ending|
           middle = build_middle_pairs(start,ending)
-          chain_args = {start: start,:start_trade_direction => determine_buy_or_sell(start),middle:middle,:middle_trade_direction => determine_middle_buy_or_sell(middle,ending),ending:ending,:ending_trade_direction => determine_buy_or_sell(ending)}
-          chain = Chain.new(@public_client,chain_args)
-          puts chain.to_s
-          chains.append(chain)
+          if @split_ids.any? {|pair| pair == middle}
+            chain_args = {start: start,:start_trade_direction => determine_buy_or_sell(start),middle:middle,:middle_trade_direction => determine_middle_buy_or_sell(middle,ending),ending:ending,:ending_trade_direction => determine_buy_or_sell(ending)}
+            chain = Chain.new(@public_client,chain_args)
+            puts chain.to_s
+            chains.append(chain)
+          else
+            next
+          end
         end
       end
       puts "done building chains"
