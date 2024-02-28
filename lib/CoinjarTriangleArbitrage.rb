@@ -39,10 +39,21 @@ module CoinjarTriangleArbitrage
     end
     # {oid:"number"}
     def place_order(product_id,price,buy_or_sell,size,type = "LMT")
-      JSON.parse(self.class.post('/orders',body: JSON.generate({"type" => type.to_s,"size" => size.to_s,"product_id" => product_id.to_s,"side" => buy_or_sell.to_s,"price" => price.to_s})).to_s)
+      JSON.parse(self.class.post('/orders',body: JSON.generate({"type" => type.to_s,"size" => size.to_s,"product_id" => product_id.merge.to_s,"side" => buy_or_sell.to_s,"price" => price.to_s})).to_s)
     end
     def get_order(order_id)
       JSON.parse(self.class.get("/orders/#{order_id.to_s}").to_s).to_h
+    end
+  end
+  class Trade
+
+  end
+  class TradeFactory
+    def initialize
+      raise NotImplementedError
+    end
+    def build_trades
+      raise NotImplementedError
     end
   end
   class Chain
@@ -50,6 +61,7 @@ module CoinjarTriangleArbitrage
     def initialize(public_client,chain_args)
       @public_client = public_client
       @chain_args = chain_args
+      puts @chain_args
       @result = calculate_result
       # only valid if the start currency and end currency are the same
       @profit = @result - FIAT_DECIMAL_INITIAL_AMOUNT
@@ -145,12 +157,17 @@ module CoinjarTriangleArbitrage
       @split_ids.select {|pair| @end_currency == pair[0] || @end_currency == pair[1]}
       puts "done finding ending pairs"
     end
-    def determine_buy_or_sell(pair)
-      if pair[1] == @start_currency
-        return :buy
+    def determine_end_buy_or_sell(pair)
+      if pair[1] == @end_currency
+        return :sell
       elsif pair[0] == @end_currency
         return :buy
-      else
+        end
+    end
+    def determine_start_buy_or_sell(pair)
+      if pair[1] == @start_currency
+        return :buy
+      elsif pair[0] == @start_currency
         return :sell
       end
     end
@@ -175,7 +192,7 @@ module CoinjarTriangleArbitrage
         @end_pairs.uniq.each do |ending|
           middle = build_middle_pairs(start,ending)
           if @split_ids.any? {|pair| pair == middle}
-            chain_args = {start: start,:start_trade_direction => determine_buy_or_sell(start),middle:middle,:middle_trade_direction => determine_middle_buy_or_sell(middle,ending),ending:ending,:ending_trade_direction => determine_buy_or_sell(ending)}
+            chain_args = {start: start,:start_trade_direction => determine_start_buy_or_sell(start),middle:middle,:middle_trade_direction => determine_middle_buy_or_sell(middle,ending),ending:ending,:ending_trade_direction => determine_end_buy_or_sell(ending)}
             chain = Chain.new(@public_client,chain_args)
             if chain.profit.nan?
               next
@@ -203,7 +220,7 @@ module CoinjarTriangleArbitrage
       @all_product_ids = @all_products.map { |currency| currency["name"] }
     end
     def run
-      ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.max {|chain| chain.profit <=> chain.profit}
+      ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.select { |chain| chain.profit.to_f.finite? }.max {|chain_a,chain_b| chain_a.profit.to_f <=> chain_b.profit.to_f}
     end
   end
   class Trader
