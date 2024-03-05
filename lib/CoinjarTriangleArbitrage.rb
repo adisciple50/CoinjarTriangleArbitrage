@@ -177,7 +177,11 @@ module CoinjarTriangleArbitrage
         end_symbols = find_opposing_currencies @end_currency
       end
       # with thanks to Appocrathon the angel - its his algo! licenced to everyone. free and open source for all.
-      sieved_pairs = determine_valid_trades(start_symbols,end_symbols).append(determine_valid_trades(end_symbols,start_symbols)).uniq
+      sieved_pairs = []
+      sieved_pairs << determine_valid_trades(start_symbols,end_symbols)
+      sieved_pairs << determine_valid_trades(end_symbols,start_symbols)
+      sieved_pairs.flatten!
+      sieved_pairs.uniq!
       puts "done finding intermediate pairs"
       return sieved_pairs
     end
@@ -205,7 +209,6 @@ module CoinjarTriangleArbitrage
     def build_chains
       puts "building chains now"
       chains = []
-      chain_args = {}
       Parallel.each(@start_trades.uniq, in_threads:@start_trades.uniq.count) do |start|
         @intermediate_pairs.each do |middle|
           middle_trade_currency_one = find_operative_currency(start,@start_currency)
@@ -223,6 +226,7 @@ module CoinjarTriangleArbitrage
           chain.trade_three_direction = middle_trade_currency_two == end_trade.base ? :sell : :buy
           chain.calculate_result
           chain.calculate_profit
+          chains << chain
         end
       end
       puts "done building chains"
@@ -248,7 +252,6 @@ module CoinjarTriangleArbitrage
     def initialize(winning_chain)
       @trading = TRADING
       @winner = winning_chain
-      @chain_args = @winner.chain_args
       @client = PrivateClient.new
       @public = PublicClient.new
     end
@@ -308,5 +311,5 @@ end
 
 
 winner = CoinjarTriangleArbitrage::Scout.new.run
-puts winner.to_s
-CoinjarTriangleArbitrage::Trader.new(winner).run
+puts winner
+# CoinjarTriangleArbitrage::Trader.new(winner).run
