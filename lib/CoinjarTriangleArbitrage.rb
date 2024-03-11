@@ -300,13 +300,13 @@ module CoinjarTriangleArbitrage
           puts "trade_one is"
           puts trade_one
           wait_until_filled(trade_one["oid"])
-          amount_two = @winner.amount_two
+          amount_two = @winner.amount_two * 0.999
           puts "amount 2 is"
           puts amount_two
           trade_two = @client.place_order(@winner.trade_two.id,@winner.get_quote_based_on_trade_direction(@winner.trade_two,@winner.trade_two_direction).to_s,@winner.trade_two_direction.to_s,amount_two)
           puts trade_two
           wait_until_filled(trade_two["oid"])
-          amount_three =  @winner.amount_three
+          amount_three =  @winner.amount_three * 0.999
           puts "amount 3 is"
           puts amount_three
           trade_three = @client.place_order(@winner.trade_three.id,@winner.get_quote_based_on_trade_direction(@winner.trade_three,@winner.trade_three_direction),@winner.trade_three_direction.to_s,amount_three)
