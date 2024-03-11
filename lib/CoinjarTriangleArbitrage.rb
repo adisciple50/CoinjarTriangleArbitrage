@@ -9,7 +9,7 @@ module CoinjarTriangleArbitrage
   START_CURRENCY = 'GBP'
   END_CURRENCY = 'GBP'
   FIAT_DECIMAL_INITIAL_AMOUNT = 50.00
-  TRADING = true
+  TRADING = false
   MIN_PROFIT = 0.2
   class PublicClient
     include HTTParty
@@ -68,9 +68,10 @@ module CoinjarTriangleArbitrage
         trade.id = product["id"]
         trade.buy_precision = product["counter_currency"]["subunit_to_unit"].to_i.digits[1..-1].length
         trade.sell_precision = product["base_currency"]["subunit_to_unit"].to_i.digits[1..-1].length
-        trade.price = @public.ticker(trade.id)["ask"].to_f
-        trade.buy_price = trade.price
-        trade.sell_price = 1/trade.price
+        ticker = @public.ticker(trade.id)
+        trade.price = ticker["ask"]
+        trade.buy_price = ticker["ask"].to_f
+        trade.sell_price = ticker["bid"].to_f
         trade
       end
       return @trades
@@ -78,7 +79,7 @@ module CoinjarTriangleArbitrage
   end
   class Chain
     attr_accessor :result,:trade_one,:trade_two,:trade_three,:profit,:trade_one_price,:trade_two_price,:trade_three_price,:trade_one_direction,:trade_two_direction,:trade_three_direction
-    attr_reader :trade_one_quote,:trade_two_quote,:trade_three_quote
+    attr_reader :trade_one_quote,:trade_two_quote,:trade_three_quote,:amount_one,:amount_two,:amount_three
     def initialize()
 
     end
@@ -94,6 +95,22 @@ module CoinjarTriangleArbitrage
         return product.sell_price
       end
     end
+    def amount_based_on_trade_direction(start_amount,trade_direction,price)
+      start_amount = start_amount.to_f
+      price = price.to_f
+      if trade_direction == :buy
+        return  start_amount / price
+      elsif trade_direction == :sell
+        return  start_amount * price
+      end
+    end
+    def get_precision(product,order_side)
+      if order_side == :buy
+        return product.buy_precision
+      elsif order_side == :sell
+        return product.sell_precision
+      end
+    end
     def calculate_result
       @trade_one_quote = get_quote_based_on_trade_direction(@trade_one,@trade_one_direction)
       @trade_two_quote = get_quote_based_on_trade_direction(@trade_two,@trade_two_direction)
@@ -101,7 +118,14 @@ module CoinjarTriangleArbitrage
       @trade_one_price = @trade_one_quote * 0.999
       @trade_two_price = @trade_two_quote * 0.999
       @trade_three_price = @trade_three_quote * 0.999
-      @result = @trade_one_price * @trade_two_price * @trade_three_price * FIAT_DECIMAL_INITIAL_AMOUNT
+      @amount_one = amount_based_on_trade_direction(FIAT_DECIMAL_INITIAL_AMOUNT.to_f,@trade_one_direction,@trade_one_quote.to_f)
+      @amount_one = @amount_one.truncate(get_precision(@trade_one,@trade_one_direction)).to_f
+      @amount_two = amount_based_on_trade_direction(@amount_one.to_f,@trade_two_direction,@trade_two_quote.to_f)
+      @amount_two = @amount_two.truncate(get_precision(@trade_two,@trade_two_direction)).to_f
+      @amount_three = amount_based_on_trade_direction(@amount_two.to_f,@trade_three_direction,@trade_three_quote.to_f)
+      @amount_three = @amount_three.truncate(get_precision(@trade_three,@trade_three_direction)).to_f
+      # TODO: Deals with amounts rather than prices. need to calculate the amounts.
+      @result = @amount_three * 0.997002999
     end
     def calculate_profit
       # only valid if the start currency and end currency are the same
@@ -114,15 +138,11 @@ module CoinjarTriangleArbitrage
       else
         profit = "Please Manually Calculate For Now"
       end
-      return "#{@trade_one.id} - trade direction: #{trade_one_direction} - price: #{@trade_one.price}
-      \n
-      #{@trade_two.id} - trade direction: #{@trade_two_direction} - price: #{@trade_two.price}
-      \n
-      #{@trade_three.id} - trade direction: #{@trade_three_direction} - price: #{@trade_three.price}
-      \n
-      result with fees : #{@result} - profit with all fees is = #{profit}
-      \n
-      ==="
+      return "#{@trade_one.id} - trade direction: #{@trade_one_direction} - price: #{get_quote_based_on_trade_direction(@trade_one,@trade_one_direction).to_s} - amount: #{@amount_one}
+      \n#{@trade_two.id} - trade direction: #{@trade_two_direction} - price: #{get_quote_based_on_trade_direction(@trade_two,@trade_two_direction).to_s} - amount: #{@amount_two}
+      \n#{@trade_three.id} - trade direction: #{@trade_three_direction} - price: #{get_quote_based_on_trade_direction(@trade_three,@trade_three_direction).to_s} - amount: #{@amount_three}
+      \nresult with fees : #{@result} - profit with all fees is = #{profit}
+      \n==="
     end
   end
   class ChainFactory
@@ -256,13 +276,7 @@ module CoinjarTriangleArbitrage
       @client = PrivateClient.new
       @public = PublicClient.new
     end
-    def get_precision(product,order_side)
-      if order_side == :buy
-        return product.buy_precision
-      elsif order_side == :sell
-        return product.sell_precision
-      end
-    end
+
     def wait_until_filled(oid)
       order = @client.get_order(oid)
       if order == {}
@@ -275,25 +289,27 @@ module CoinjarTriangleArbitrage
         puts order.to_s
       end
     end
+
     def run
       while @trading
         if @winner.profit >= MIN_PROFIT
-          amount_one = FIAT_DECIMAL_INITIAL_AMOUNT.to_f * @winner.get_quote_based_on_trade_direction(@winner.trade_one,@winner.trade_one_direction).to_f
-          amount_one = amount_one.truncate(get_precision(@winner.trade_one,@winner.trade_one_direction)).to_s
+          amount_one = @winner.amount_one
           puts "amount 1 is"
           puts amount_one
-          trade_one = @client.place_order(@winner.trade_one.id,@winner.trade_one.price,@winner.trade_one_direction.to_s,amount_one)
+          trade_one = @client.place_order(@winner.trade_one.id,@winner.get_quote_based_on_trade_direction(@winner.trade_one,@winner.trade_one_direction).to_s,@winner.trade_one_direction.to_s,amount_one)
           puts "trade_one is"
           puts trade_one
           wait_until_filled(trade_one["oid"])
-          amount_two = trade_one["size"].to_f * @winner.get_quote_based_on_trade_direction(winner.trade_two,@winner.trade_two_direction).to_f
-          amount_two = amount_two.truncate(get_precision(@winner.trade_two,@winner.trade_two_direction)).to_s
-          trade_two = @client.place_order(@winner.trade_two.id,@winner.trade_two.price,@winner.trade_two_direction.to_s,amount_two)
+          amount_two = @winner.amount_two
+          puts "amount 2 is"
+          puts amount_two
+          trade_two = @client.place_order(@winner.trade_two.id,@winner.get_quote_based_on_trade_direction(@winner.trade_two,@winner.trade_two_direction).to_s,@winner.trade_two_direction.to_s,amount_two)
           puts trade_two
           wait_until_filled(trade_two["oid"])
-          amount_three = trade_two["size"].to_f * @winner.get_quote_based_on_trade_direction(winner.trade_three,@winner.trade_three_direction).to_f
-          amount_three = amount_three.truncate(get_precision(@winner.trade_three,@winner.trade_three_direction)).to_s
-          trade_three = @client.place_order(@winner.trade_three.id,@winner.trade_three.price,@winner.trade_three_direction.to_s,amount_three)
+          amount_three =  @winner.amount_three
+          puts "amount 3 is"
+          puts amount_three
+          trade_three = @client.place_order(@winner.trade_three.id,@winner.get_quote_based_on_trade_direction(@winner.trade_three,@winner.trade_three_direction),@winner.trade_three_direction.to_s,amount_three)
           puts trade_three
           wait_until_filled(trade_three["oid"])
         end
