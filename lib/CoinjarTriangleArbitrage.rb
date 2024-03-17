@@ -124,7 +124,7 @@ module CoinjarTriangleArbitrage
       @amount_two = @amount_two.truncate(get_precision(@trade_two,@trade_two_direction)).to_f
       @amount_three = amount_based_on_trade_direction(@amount_two.to_f,@trade_three_direction,@trade_three_quote.to_f)
       @amount_three = @amount_three.truncate(get_precision(@trade_three,@trade_three_direction)).to_f
-      # TODO: Deals with amounts rather than prices. need to calculate the amounts.
+      # Deals with amounts rather than prices. need to calculate the amounts.
       @result = @amount_three * 0.997002999
     end
     def calculate_profit
