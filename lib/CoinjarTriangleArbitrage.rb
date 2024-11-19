@@ -245,7 +245,7 @@ module CoinjarTriangleArbitrage
     def run
       while @trading
         if @winner.profit >= MIN_PROFIT
-          amount_one = FIAT_DECIMAL_INITIAL_AMOUNT.to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction]).to_f
+          amount_one = FIAT_DECIMAL_INITIAL_AMOUNT.to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction]).to_f.truncate(get_precision(@chain_args[:start],@chain_args[:start_trade_direction]))
           amount_one = amount_one.truncate(get_precision(@chain_args[:start],@chain_args[:start_trade_direction])).to_s
           puts "amount 1 is"
           puts amount_one
@@ -253,12 +253,12 @@ module CoinjarTriangleArbitrage
           puts "trade_one is"
           puts trade_one
           wait_until_filled(trade_one["oid"])
-          amount_two = trade_one["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction]).to_f
+          amount_two = trade_one["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction]).to_f.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction]))
           amount_two = amount_two.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction])).to_s
           trade_two = @client.place_order(@chain_args[:middle].join,@winner.trade_two_price,@chain_args[:middle_trade_direction].to_s,amount_two)
           puts trade_two
           wait_until_filled(trade_two["oid"])
-          amount_three = trade_two["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction]).to_f
+          amount_three = trade_two["size"].to_f * @winner.get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction]).to_f.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
           amount_three = amount_three.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
           trade_three = @client.place_order(@chain_args[:ending].join,@winner.trade_three_price,@chain_args[:ending_trade_direction].to_s,amount_three)
           puts trade_three
