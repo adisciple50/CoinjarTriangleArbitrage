@@ -269,7 +269,8 @@ module CoinjarTriangleArbitrage
   end
 end
 
-
-winner = CoinjarTriangleArbitrage::Scout.new.run
-puts winner.to_s
-CoinjarTriangleArbitrage::Trader.new(winner).run
+while true
+  winner = CoinjarTriangleArbitrage::Scout.new.run
+  puts winner.to_s
+  CoinjarTriangleArbitrage::Trader.new(winner).run
+end
