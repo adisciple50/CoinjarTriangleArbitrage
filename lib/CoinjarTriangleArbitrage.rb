@@ -18,10 +18,15 @@ module CoinjarTriangleArbitrage
     def initialize
     end
     def get_all_products
+      begin
       request = self.class.get('https://api.exchange.coinjar.com/products',format: :plain)
       response = request.body.to_s
       # puts "all products response is #{response}"
       JSON.parse(response)
+      rescue
+        puts "error in response from method all products found"
+        puts response
+      end
     end
     def ticker(id)
       id = id.to_s.upcase
@@ -29,6 +34,23 @@ module CoinjarTriangleArbitrage
       response = request.body.to_s
       # puts "ticker response is #{response} and id is #{id}"
       JSON.parse(response)
+    end
+    def get_precision(product,order_side)
+      all_products = get_all_products
+      selected_product = all_products.select {|p| p["name"] == product.join("/")}
+      if order_side == :buy
+        precision = selected_product[0]["counter_currency"]
+        # puts precision
+        x = precision["subunit_to_unit"].to_i.digits[1..-1].length
+        # puts x
+        return x
+      else
+        precision = selected_product[0]["base_currency"]
+        # puts precision
+        x = precision["subunit_to_unit"].to_i.digits[1..-1].length
+        # puts x
+        return x
+      end
     end
   end
   class PrivateClient
@@ -79,13 +101,16 @@ module CoinjarTriangleArbitrage
       @trade_one_quote = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction])
       @trade_two_quote = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction])
       @trade_three_quote = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction])
-      @trade_one_amount = FIAT_DECIMAL_INITIAL_AMOUNT * @trade_one_quote
+      @trade_one_amount = FIAT_DECIMAL_INITIAL_AMOUNT * @trade_one_quote * COMMISION
+      @trade_one_amount.truncate(@public_client.get_precision(@chain_args[:start],@chain_args[:start_trade_direction]))
       @trade_two_amount = @trade_one_amount * COMMISION * @trade_two_quote
+      @trade_two_amount.truncate(@public_client.get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction]))
       @trade_three_amount = @trade_two_amount * COMMISION * @trade_three_quote
+      @trade_three_amount.truncate(@public_client.get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction]))
       @trade_one_price = @ticker_one
       @trade_two_price = @ticker_two
       @trade_three_price = @ticker_three
-      @result = @trade_three_amount * COMMISION
+      @result = @trade_three_amount
     end
     def to_s
       profit = @profit
@@ -102,6 +127,22 @@ module CoinjarTriangleArbitrage
       @chain_args[:trade_three_amount] = @trade_three_amount
 
       return "#{@chain_args} - result: #{@result} - profit is = #{profit}"
+    end
+    def to_h
+      profit = @profit
+      if START_CURRENCY == END_CURRENCY
+        profit = @profit.to_s
+      else
+        profit = "Please Manually Calculate For Now"
+      end
+      @chain_args[:trade_one_price] = @trade_one_price
+      @chain_args[:trade_two_price] = @trade_two_price
+      @chain_args[:trade_three_price] = @trade_three_price
+      @chain_args[:trade_one_amount] = @trade_one_amount
+      @chain_args[:trade_two_amount] = @trade_two_amount
+      @chain_args[:trade_three_amount] = @trade_three_amount
+
+      return @chain_args.update({result: @result}).update({profit: profit})
     end
   end
   class ChainFactory
@@ -194,7 +235,7 @@ module CoinjarTriangleArbitrage
             if chain.profit.nan?
               next
             end
-            puts chain.to_s
+            # puts chain.to_h.to_s
             chains.append(chain)
           else
             next
@@ -230,19 +271,7 @@ module CoinjarTriangleArbitrage
       @public = PublicClient.new
     end
     def get_precision(product,order_side)
-      all_products = @public.get_all_products
-      selected_product = all_products.select {|p| p["name"] == product.join("/")}
-      # selected_product = selected_product[0]
-      # puts selected_product.to_s
-      if order_side == :buy
-        precision = selected_product[0]["counter_currency"]
-        # puts precision
-        return precision["subunit_to_unit"].to_i.digits[1..-1].length
-      else
-        precision = selected_product[0]["base_currency"]
-        # puts precision
-        return precision["subunit_to_unit"].to_i.digits[1..-1].length
-      end
+      @public.get_precision(product,order_side)
     end
     def wait_until_filled(oid)
       order = @client.get_order(oid)
@@ -287,7 +316,41 @@ while CoinjarTriangleArbitrage::TRADING || !won
   winner = CoinjarTriangleArbitrage::Scout.new.run
   if winner.profit > 0
     won = true
-    puts winner.to_s
+    puts "INITIAL STAKE"
+    puts CoinjarTriangleArbitrage::FIAT_DECIMAL_INITIAL_AMOUNT
+    puts "_______TRADE 1"
+    puts "TRADE 1 INSTRUMENT"
+    puts winner.to_h[:start].join("/")
+    puts "TRADE 1 PRICE"
+    puts winner.to_h[:trade_one_price]
+    puts "TRADE 1 DIRECTION"
+    puts winner.to_h[:start_trade_direction]
+    puts "TRADE 1 AMOUNT"
+    puts winner.to_h[:trade_one_amount]
+    puts "_______TRADE 2"
+    puts "TRADE 2 INSTRUMENT"
+    puts winner.to_h[:middle].join("/")
+    puts "TRADE 2 PRICE"
+    puts winner.to_h[:trade_two_price]
+    puts "TRADE 2 DIRECTION"
+    puts winner.to_h[:middle_trade_direction]
+    puts "TRADE 2 AMOUNT"
+    puts winner.to_h[:trade_two_amount]
+    puts "_______TRADE 3"
+    puts "TRADE 3 INSTRUMENT"
+    puts winner.to_h[:ending].join("/")
+    puts "TRADE 3 PRICE"
+    puts winner.to_h[:trade_three_price]
+    puts "TRADE 3 DIRECTION"
+    puts winner.to_h[:ending_trade_direction]
+    puts "TRADE 3 AMOUNT"
+    puts winner.to_h[:trade_three_amount]
+    puts "_______Arb Result"
+    puts "RESULT"
+    puts winner.to_h[:result]
+    puts "PROFIT"
+    puts winner.to_h[:profit]
+
     CoinjarTriangleArbitrage::Trader.new(winner).run
   end
 end
