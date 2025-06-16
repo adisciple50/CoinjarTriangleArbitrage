@@ -63,7 +63,7 @@ module CoinjarTriangleArbitrage
     def get_tick_size(product)
       all_products = PRODUCTS
       selected_product = all_products.select {|p| p["name"] == product.join("/")}
-      return selected_product[0]["tick_value_exponent"].to_i.abs
+      return selected_product[0]["tick_value_exponent"].to_i * -1
     end
   end
   class PrivateClient
@@ -116,22 +116,27 @@ module CoinjarTriangleArbitrage
       @trade_two_quote = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction])
       @trade_three_quote = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction])
 
-      @trade_one_amount = FIAT_DECIMAL_INITIAL_AMOUNT * @trade_one_quote * COMMISION
+      @trade_one_amount = FIAT_DECIMAL_INITIAL_AMOUNT * @trade_one_quote
       @trade_one_amount = @trade_one_amount.truncate(@public_client.get_precision(@chain_args[:start],@chain_args[:start_trade_direction]))
       @trade_one_amount = @trade_one_amount.truncate(@public_client.get_tick_size(@chain_args[:start]))
+      @trade_one_result = @trade_one_amount * COMMISION
 
-      @trade_two_amount = @trade_one_amount * COMMISION * @trade_two_quote
+      @trade_two_amount = @trade_one_result * @trade_two_quote
       @trade_two_amount = @trade_two_amount.truncate(@public_client.get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction]))
       @trade_two_amount = @trade_two_amount.truncate(@public_client.get_tick_size(@chain_args[:middle]))
+      @trade_two_result = @trade_two_amount * COMMISION
 
-      @trade_three_amount = @trade_two_amount * COMMISION * @trade_three_quote
+      @trade_three_amount = @trade_two_result * @trade_three_quote
+      @trade_three_amount = @trade_three_amount.truncate(@public_client.get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction]))
+      @trade_three_amount = @trade_three_amount.truncate(@public_client.get_tick_size(@chain_args[:ending]))
+      @trade_three_result = @trade_three_amount * COMMISION
       @trade_three_amount = @trade_three_amount.truncate(@public_client.get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction]))
       @trade_three_amount = @trade_three_amount.truncate(@public_client.get_tick_size(@chain_args[:ending]))
 
       @trade_one_price = @ticker_one
       @trade_two_price = @ticker_two
       @trade_three_price = @ticker_three
-      @result = @trade_three_amount
+      @result = @trade_three_result
     end
     def to_s
       profit = @profit
