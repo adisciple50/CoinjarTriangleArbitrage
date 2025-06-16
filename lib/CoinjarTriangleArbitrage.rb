@@ -370,7 +370,10 @@ while CoinjarTriangleArbitrage::TRADING || !won
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:result]
     CoinjarTriangleArbitrage::LOG.info "PROFIT"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:profit]
-    
+    CoinjarTriangleArbitrage::LOG.info "MARKUP PERCENTAGE - more than 100 percent to break even"
+    markup = (winner.to_h[:result].to_f / CoinjarTriangleArbitrage::FIAT_DECIMAL_INITIAL_AMOUNT) * 100
+    CoinjarTriangleArbitrage::LOG.info markup.to_s.join("%")
+
     # print to terminal
 
     puts "INITIAL STAKE"
@@ -407,6 +410,8 @@ while CoinjarTriangleArbitrage::TRADING || !won
     puts winner.to_h[:result]
     puts "PROFIT"
     puts winner.to_h[:profit]
+    puts "MARKUP PERCENTAGE - 100 percent to break even"
+    puts markup.to_s.join("%")
     
     
     CoinjarTriangleArbitrage::Trader.new(winner).run
