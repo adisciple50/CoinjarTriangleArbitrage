@@ -13,9 +13,10 @@ module CoinjarTriangleArbitrage
   END_CURRENCY = 'GBP'
   FIAT_DECIMAL_INITIAL_AMOUNT = 200.00
   TRADING = false
-  MIN_PROFIT = 0.02
+  MIN_PROFIT = 5.0
   COMMISION = 0.999
   LOG = Logger.new('trades.log')
+  PRODUCTS = JSON.parse(HTTParty.get('https://api.exchange.coinjar.com/products',format: :plain,headers: {'accept' => 'application/json'}).body)
   class PublicClient
     include HTTParty
     headers {'accept' => 'application/json'}
@@ -23,13 +24,15 @@ module CoinjarTriangleArbitrage
     end
     def get_all_products
       begin
-      request = self.class.get('https://api.exchange.coinjar.com/products',format: :json)
+      request = self.class.get('https://api.exchange.coinjar.com/products',format: :plain)
       response = request.body.to_s
       # puts "all products response is #{response}"
-      JSON.parse(response)
+      return JSON.parse(response)
       rescue
         LOG.debug "error in response from method all products found"
         LOG.debug response
+        puts "error in response from method all products found"
+        puts response
       end
     end
     def ticker(id)
@@ -40,7 +43,8 @@ module CoinjarTriangleArbitrage
       JSON.parse(response)
     end
     def get_precision(product,order_side)
-      all_products = get_all_products
+      all_products = PRODUCTS
+      # puts all_products
       selected_product = all_products.select {|p| p["name"] == product.join("/")}
       if order_side == :buy
         precision = selected_product[0]["counter_currency"]
@@ -55,6 +59,11 @@ module CoinjarTriangleArbitrage
         # puts x
         return x
       end
+    end
+    def get_tick_size(product)
+      all_products = PRODUCTS
+      selected_product = all_products.select {|p| p["name"] == product.join("/")}
+      return selected_product[0]["tick_value_exponent"].to_i.abs
     end
   end
   class PrivateClient
@@ -102,15 +111,23 @@ module CoinjarTriangleArbitrage
       @ticker_one = @public_client.ticker("#{@chain_args[:start][0]}#{@chain_args[:start][1]}")["ask"].to_f
       @ticker_two = @public_client.ticker("#{@chain_args[:middle][0]}#{@chain_args[:middle][1]}")["ask"].to_f
       @ticker_three = @public_client.ticker("#{@chain_args[:ending][0]}#{@chain_args[:ending][1]}")["ask"].to_f
+
       @trade_one_quote = get_quote_based_on_trade_direction(@chain_args[:start],@chain_args[:start_trade_direction])
       @trade_two_quote = get_quote_based_on_trade_direction(@chain_args[:middle],@chain_args[:middle_trade_direction])
       @trade_three_quote = get_quote_based_on_trade_direction(@chain_args[:ending],@chain_args[:ending_trade_direction])
+
       @trade_one_amount = FIAT_DECIMAL_INITIAL_AMOUNT * @trade_one_quote * COMMISION
-      @trade_one_amount.truncate(@public_client.get_precision(@chain_args[:start],@chain_args[:start_trade_direction]))
+      @trade_one_amount = @trade_one_amount.truncate(@public_client.get_precision(@chain_args[:start],@chain_args[:start_trade_direction]))
+      @trade_one_amount = @trade_one_amount.truncate(@public_client.get_tick_size(@chain_args[:start]))
+
       @trade_two_amount = @trade_one_amount * COMMISION * @trade_two_quote
-      @trade_two_amount.truncate(@public_client.get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction]))
+      @trade_two_amount = @trade_two_amount.truncate(@public_client.get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction]))
+      @trade_two_amount = @trade_two_amount.truncate(@public_client.get_tick_size(@chain_args[:middle]))
+
       @trade_three_amount = @trade_two_amount * COMMISION * @trade_three_quote
-      @trade_three_amount.truncate(@public_client.get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction]))
+      @trade_three_amount = @trade_three_amount.truncate(@public_client.get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction]))
+      @trade_three_amount = @trade_three_amount.truncate(@public_client.get_tick_size(@chain_args[:ending]))
+
       @trade_one_price = @ticker_one
       @trade_two_price = @ticker_two
       @trade_three_price = @ticker_three
@@ -265,12 +282,12 @@ module CoinjarTriangleArbitrage
     # headers 'Authorization' => "Bearer #{ENV['COINJAR_TRADES']}",'accept' => 'application/json'
 
     def initialize
-      @@public_client = CoinjarTriangleArbitrage::PublicClient.new
-      @all_products = @@public_client.get_all_products
+      @public_client = CoinjarTriangleArbitrage::PublicClient.new
+      @all_products = PRODUCTS
       @all_product_ids = @all_products.map { |currency| currency["name"] }
     end
     def run
-      ChainFactory.new(@@public_client,@all_product_ids,@all_products).build_chains.max {|chain| chain.profit <=> chain.profit}
+      ChainFactory.new(@public_client,@all_product_ids,@all_products).build_chains.max {|chain| chain.profit <=> chain.profit}
     end
   end
   class Trader
@@ -285,6 +302,7 @@ module CoinjarTriangleArbitrage
     def get_precision(product,order_side)
       @public.get_precision(product,order_side)
     end
+
     def wait_until_filled(oid)
       order = @client.get_order(oid)
       if order == {}
@@ -342,29 +360,29 @@ while CoinjarTriangleArbitrage::TRADING || !won
     CoinjarTriangleArbitrage::LOG.info "TRADE 1 INSTRUMENT"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:start].join("/")
     CoinjarTriangleArbitrage::LOG.info "TRADE 1 PRICE"
-    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_one_price]
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_one_price].to_f
     CoinjarTriangleArbitrage::LOG.info "TRADE 1 DIRECTION"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:start_trade_direction]
     CoinjarTriangleArbitrage::LOG.info "TRADE 1 AMOUNT"
-    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_one_amount]
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_one_amount].to_f
     CoinjarTriangleArbitrage::LOG.info "_______TRADE 2"
     CoinjarTriangleArbitrage::LOG.info "TRADE 2 INSTRUMENT"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:middle].join("/")
     CoinjarTriangleArbitrage::LOG.info "TRADE 2 PRICE"
-    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_two_price]
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_two_price].to_f
     CoinjarTriangleArbitrage::LOG.info "TRADE 2 DIRECTION"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:middle_trade_direction]
     CoinjarTriangleArbitrage::LOG.info "TRADE 2 AMOUNT"
-    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_two_amount]
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_two_amount].to_f
     CoinjarTriangleArbitrage::LOG.info "_______TRADE 3"
     CoinjarTriangleArbitrage::LOG.info "TRADE 3 INSTRUMENT"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:ending].join("/")
     CoinjarTriangleArbitrage::LOG.info "TRADE 3 PRICE"
-    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_three_price]
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_three_price].to_f
     CoinjarTriangleArbitrage::LOG.info "TRADE 3 DIRECTION"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:ending_trade_direction]
     CoinjarTriangleArbitrage::LOG.info "TRADE 3 AMOUNT"
-    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_three_amount]
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_three_amount].to_f
     CoinjarTriangleArbitrage::LOG.info "_______Arb Result"
     CoinjarTriangleArbitrage::LOG.info "RESULT"
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:result]
@@ -372,7 +390,7 @@ while CoinjarTriangleArbitrage::TRADING || !won
     CoinjarTriangleArbitrage::LOG.info winner.to_h[:profit]
     CoinjarTriangleArbitrage::LOG.info "MARKUP PERCENTAGE - more than 100 percent to break even"
     markup = (winner.to_h[:result].to_f / CoinjarTriangleArbitrage::FIAT_DECIMAL_INITIAL_AMOUNT) * 100
-    CoinjarTriangleArbitrage::LOG.info markup.to_s.join("%")
+    CoinjarTriangleArbitrage::LOG.info markup.to_s + "%"
 
     # print to terminal
 
@@ -382,36 +400,36 @@ while CoinjarTriangleArbitrage::TRADING || !won
     puts "TRADE 1 INSTRUMENT"
     puts winner.to_h[:start].join("/")
     puts "TRADE 1 PRICE"
-    puts winner.to_h[:trade_one_price]
+    puts winner.to_h[:trade_one_price].to_f
     puts "TRADE 1 DIRECTION"
     puts winner.to_h[:start_trade_direction]
     puts "TRADE 1 AMOUNT"
-    puts winner.to_h[:trade_one_amount]
+    puts winner.to_h[:trade_one_amount].to_f
     puts "_______TRADE 2"
     puts "TRADE 2 INSTRUMENT"
     puts winner.to_h[:middle].join("/")
     puts "TRADE 2 PRICE"
-    puts winner.to_h[:trade_two_price]
+    puts winner.to_h[:trade_two_price].to_f
     puts "TRADE 2 DIRECTION"
     puts winner.to_h[:middle_trade_direction]
     puts "TRADE 2 AMOUNT"
-    puts winner.to_h[:trade_two_amount]
+    puts winner.to_h[:trade_two_amount].to_f
     puts "_______TRADE 3"
     puts "TRADE 3 INSTRUMENT"
     puts winner.to_h[:ending].join("/")
     puts "TRADE 3 PRICE"
-    puts winner.to_h[:trade_three_price]
+    puts winner.to_h[:trade_three_price].to_f
     puts "TRADE 3 DIRECTION"
     puts winner.to_h[:ending_trade_direction]
     puts "TRADE 3 AMOUNT"
-    puts winner.to_h[:trade_three_amount]
+    puts winner.to_h[:trade_three_amount].to_f
     puts "_______Arb Result"
     puts "RESULT"
     puts winner.to_h[:result]
     puts "PROFIT"
     puts winner.to_h[:profit]
     puts "MARKUP PERCENTAGE - 100 percent to break even"
-    puts markup.to_s.join("%")
+    puts markup.to_s + "%"
     
     
     CoinjarTriangleArbitrage::Trader.new(winner).run
