@@ -4,14 +4,18 @@ require_relative "CoinjarTriangleArbitrage/version"
 require 'httparty'
 require 'json'
 require 'parallel'
+require 'logger'
+
+
 
 module CoinjarTriangleArbitrage
   START_CURRENCY = 'GBP'
   END_CURRENCY = 'GBP'
-  FIAT_DECIMAL_INITIAL_AMOUNT = 40.00
+  FIAT_DECIMAL_INITIAL_AMOUNT = 200.00
   TRADING = false
-  MIN_PROFIT = 0.2
+  MIN_PROFIT = 0.02
   COMMISION = 0.999
+  LOG = Logger.new('trades.log')
   class PublicClient
     include HTTParty
     headers {'accept' => 'application/json'}
@@ -19,13 +23,13 @@ module CoinjarTriangleArbitrage
     end
     def get_all_products
       begin
-      request = self.class.get('https://api.exchange.coinjar.com/products',format: :plain)
+      request = self.class.get('https://api.exchange.coinjar.com/products',format: :json)
       response = request.body.to_s
       # puts "all products response is #{response}"
       JSON.parse(response)
       rescue
-        puts "error in response from method all products found"
-        puts response
+        LOG.debug "error in response from method all products found"
+        LOG.debug response
       end
     end
     def ticker(id)
@@ -167,12 +171,15 @@ module CoinjarTriangleArbitrage
       @intermediate_pairs = find_intermediate_pairs
     end
     def find_starting_pairs
+      LOG.info "finding start pairs"
+      LOG.info "done finding start pairs"
       puts "finding start pairs"
       puts "done finding start pairs"
       return @split_ids.select {|pair| @start_currency == pair[0] || @start_currency == pair[1]}
     end
 
     def find_intermediate_pairs
+      LOG.info "starting to find intermediate pairs"
       puts "starting to find intermediate pairs"
       sieved_pairs = []
       start_symbols = @starting_trades
@@ -191,13 +198,16 @@ module CoinjarTriangleArbitrage
           end
         end
       end
+      LOG.info "done finding intermediate pairs"
       puts "done finding intermediate pairs"
       return sieved_pairs
     end
 
     def find_ending_pairs
+      LOG.info "finding ending pairs"
       puts "finding ending pairs"
       @split_ids.select {|pair| @end_currency == pair[0] || @end_currency == pair[1]}
+      LOG.info "done finding ending pairs"
       puts "done finding ending pairs"
     end
     def determine_buy_or_sell(pair)
@@ -223,6 +233,7 @@ module CoinjarTriangleArbitrage
       return merged.select {|symbol| symbol != @start_currency || symbol != @end_currency}
     end
     def build_chains
+      LOG.info "building chains now"
       puts "building chains now"
       chains = []
       chain_args = {}
@@ -242,6 +253,7 @@ module CoinjarTriangleArbitrage
           end
         end
       end
+      LOG.info "done building chains"
       puts "done building chains"
       return chains
     end
@@ -278,9 +290,11 @@ module CoinjarTriangleArbitrage
       if order == {}
         raise "response is empty"
       end
+      LOG.info order
       puts order
-      while order["status"] != "filled" 
+      while order["status"] != "filled"
         sleep 1
+        LOG.info "response is"
         puts "response is"
         puts order.to_s
       end
@@ -290,20 +304,26 @@ module CoinjarTriangleArbitrage
         if @winner.profit >= MIN_PROFIT
           amount_one = @winner.trade_one_amount
           amount_one = amount_one.truncate(get_precision(@chain_args[:start],@chain_args[:start_trade_direction])).to_s
+          LOG.info "amount 1 is"
+          LOG.info amount_one
           puts "amount 1 is"
           puts amount_one
           trade_one = @client.place_order(@chain_args[:start].join,@winner.trade_one_price,@chain_args[:start_trade_direction].to_s,amount_one)
+          LOG.info "trade_one is"
+          LOG.info trade_one
           puts "trade_one is"
           puts trade_one
           wait_until_filled(trade_one["oid"])
           amount_two = @winner.trade_two_amount
           amount_two = amount_two.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction])).to_s
           trade_two = @client.place_order(@chain_args[:middle].join,@winner.trade_two_price,@chain_args[:middle_trade_direction].to_s,amount_two)
+          LOG.info trade_two
           puts trade_two
           wait_until_filled(trade_two["oid"])
           amount_three = @winner.trade_three_amount
           amount_three = amount_three.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
           trade_three = @client.place_order(@chain_args[:ending].join,@winner.trade_three_price,@chain_args[:ending_trade_direction].to_s,amount_three)
+          LOG.info trade_three
           puts trade_three
           wait_until_filled(trade_three["oid"])
         end
@@ -316,6 +336,43 @@ while CoinjarTriangleArbitrage::TRADING || !won
   winner = CoinjarTriangleArbitrage::Scout.new.run
   if winner.profit > 0
     won = true
+    CoinjarTriangleArbitrage::LOG.info "INITIAL STAKE"
+    CoinjarTriangleArbitrage::LOG.info CoinjarTriangleArbitrage::FIAT_DECIMAL_INITIAL_AMOUNT
+    CoinjarTriangleArbitrage::LOG.info "_______TRADE 1"
+    CoinjarTriangleArbitrage::LOG.info "TRADE 1 INSTRUMENT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:start].join("/")
+    CoinjarTriangleArbitrage::LOG.info "TRADE 1 PRICE"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_one_price]
+    CoinjarTriangleArbitrage::LOG.info "TRADE 1 DIRECTION"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:start_trade_direction]
+    CoinjarTriangleArbitrage::LOG.info "TRADE 1 AMOUNT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_one_amount]
+    CoinjarTriangleArbitrage::LOG.info "_______TRADE 2"
+    CoinjarTriangleArbitrage::LOG.info "TRADE 2 INSTRUMENT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:middle].join("/")
+    CoinjarTriangleArbitrage::LOG.info "TRADE 2 PRICE"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_two_price]
+    CoinjarTriangleArbitrage::LOG.info "TRADE 2 DIRECTION"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:middle_trade_direction]
+    CoinjarTriangleArbitrage::LOG.info "TRADE 2 AMOUNT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_two_amount]
+    CoinjarTriangleArbitrage::LOG.info "_______TRADE 3"
+    CoinjarTriangleArbitrage::LOG.info "TRADE 3 INSTRUMENT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:ending].join("/")
+    CoinjarTriangleArbitrage::LOG.info "TRADE 3 PRICE"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_three_price]
+    CoinjarTriangleArbitrage::LOG.info "TRADE 3 DIRECTION"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:ending_trade_direction]
+    CoinjarTriangleArbitrage::LOG.info "TRADE 3 AMOUNT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:trade_three_amount]
+    CoinjarTriangleArbitrage::LOG.info "_______Arb Result"
+    CoinjarTriangleArbitrage::LOG.info "RESULT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:result]
+    CoinjarTriangleArbitrage::LOG.info "PROFIT"
+    CoinjarTriangleArbitrage::LOG.info winner.to_h[:profit]
+    
+    # print to terminal
+
     puts "INITIAL STAKE"
     puts CoinjarTriangleArbitrage::FIAT_DECIMAL_INITIAL_AMOUNT
     puts "_______TRADE 1"
@@ -350,7 +407,8 @@ while CoinjarTriangleArbitrage::TRADING || !won
     puts winner.to_h[:result]
     puts "PROFIT"
     puts winner.to_h[:profit]
-
+    
+    
     CoinjarTriangleArbitrage::Trader.new(winner).run
   end
 end
