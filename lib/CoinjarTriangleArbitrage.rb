@@ -338,13 +338,13 @@ module CoinjarTriangleArbitrage
           puts trade_one
           wait_until_filled(trade_one["oid"])
           amount_two = @winner.trade_two_amount
-          amount_two = amount_two.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction])).to_s
+          # amount_two = amount_two.truncate(get_precision(@chain_args[:middle],@chain_args[:middle_trade_direction])).to_s
           trade_two = @client.place_order(@chain_args[:middle].join,@winner.trade_two_price,@chain_args[:middle_trade_direction].to_s,amount_two)
           LOG.info trade_two
           puts trade_two
           wait_until_filled(trade_two["oid"])
           amount_three = @winner.trade_three_amount
-          amount_three = amount_three.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
+          # amount_three = amount_three.truncate(get_precision(@chain_args[:ending],@chain_args[:ending_trade_direction])).to_s
           trade_three = @client.place_order(@chain_args[:ending].join,@winner.trade_three_price,@chain_args[:ending_trade_direction].to_s,amount_three)
           LOG.info trade_three
           puts trade_three
